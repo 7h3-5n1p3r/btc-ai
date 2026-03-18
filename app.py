@@ -281,7 +281,7 @@ Please provide a helpful and accurate answer."""
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama3-8b-8192",
+                "model": "llama-3.1-8b-instant",
                 "messages": messages,
                 "max_tokens": 500,
                 "temperature": 0.7
