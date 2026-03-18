@@ -1,7 +1,7 @@
 # =============================================================
-# BTR AI Middleware - app.py (Version 2.0)
+# BTR AI Middleware - app.py (Version 2.1 - Debug Mode)
 # =============================================================
-# Handles: Language detection, Translation, Web Search, 
+# Handles: Language detection, Translation, Web Search,
 #          Knowledge Base, AI Answering
 # =============================================================
 
@@ -239,7 +239,7 @@ def search_serper(query):
 # =============================================================
 def get_ai_answer(question, knowledge_context, web_context):
     try:
-        # Build prompt combining knowledge base and web results
+        # Build prompt
         prompt = f"""<|system|>
 You are a helpful AI assistant for Bodoland Territorial Region (BTR), Assam, India.
 Answer clearly, accurately and respectfully based on the information provided.
@@ -258,6 +258,9 @@ QUESTION: {question}
 
         # Try up to 3 times if model is loading
         for attempt in range(3):
+
+            print(f"[AI attempt {attempt + 1}/3]")
+
             response = requests.post(
                 "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta",
                 headers={
@@ -275,28 +278,52 @@ QUESTION: {question}
                 timeout=60
             )
 
+            # Log full raw response for debugging
+            print(f"[HF status code]: {response.status_code}")
             result = response.json()
+            print(f"[HF raw response]: {str(result)[:300]}")
 
-            # Check if model is still loading
+            # Model is still loading - wait and retry
             if isinstance(result, dict) and "error" in result:
-                if "loading" in str(result["error"]).lower():
-                    print(f"[Model loading, attempt {attempt + 1}/3, waiting 20s]")
-                    time.sleep(20)
+                error_msg = str(result["error"]).lower()
+                print(f"[HF error]: {result['error']}")
+
+                if "loading" in error_msg:
+                    wait_time = result.get("estimated_time", 20)
+                    print(f"[Model loading, waiting {wait_time}s]")
+                    time.sleep(float(wait_time))
                     continue
+
+                elif "quota" in error_msg or "rate" in error_msg:
+                    # Rate limited - return friendly message
+                    return "I am receiving too many requests right now. Please try again in a minute."
+
+                elif "authorization" in error_msg or "token" in error_msg:
+                    # Bad API key
+                    print("[ERROR]: HuggingFace token is invalid or missing")
+                    return "AI service configuration error. Please contact the administrator."
+
                 else:
-                    print(f"[AI error]: {result}")
+                    # Unknown error
+                    print(f"[Unknown HF error]: {result}")
                     return "I apologize, the AI service is temporarily unavailable. Please try again."
 
-            # Got valid response
+            # Got a valid response
             if isinstance(result, list) and len(result) > 0:
                 answer = result[0].get("generated_text", "").strip()
-                print(f"[AI answer]: {answer[:100]}")
-                return answer
+                if answer:
+                    print(f"[AI answer]: {answer[:150]}")
+                    return answer
 
+            # Empty response
+            print(f"[Empty response from HF]: {result}")
+            return "I could not generate an answer. Please try again."
+
+        # All 3 attempts failed
         return "I apologize, the AI service is temporarily busy. Please try again in a moment."
 
     except Exception as e:
-        print(f"[AI error]: {e}")
+        print(f"[AI exception]: {e}")
         return "I apologize, I could not generate an answer right now. Please try again."
 
 
@@ -378,7 +405,7 @@ def health():
     return jsonify({
         "status"          : "running",
         "service"         : "BTR AI Middleware",
-        "version"         : "2.0",
+        "version"         : "2.1",
         "knowledge_chunks": len(knowledge_base)
     })
 
