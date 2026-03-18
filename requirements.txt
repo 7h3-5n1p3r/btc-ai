@@ -1,1 +1,15 @@
+# Web framework - handles incoming requests from your chat widget
+flask==3.0.3
+flask-cors==4.0.0
 
+# HTTP requests - used to call Tavily, Serper, Flowise, HuggingFace
+requests==2.31.0
+
+# Language detection - detects if user typed in Bodo, Hindi, English etc
+langdetect==1.0.9
+
+# Environment variables - safely loads your API keys
+python-dotenv==1.0.0
+
+# Production server - runs your Flask app properly on Render
+gunicorn==21.2.0
