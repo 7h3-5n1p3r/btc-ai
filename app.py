@@ -290,7 +290,7 @@ Answer:"""
 
         # Call Mistral on HuggingFace
         response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
+            ""https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta",",
             headers={
                 "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
                 "Content-Type": "application/json"
