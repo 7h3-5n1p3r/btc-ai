@@ -1,8 +1,8 @@
 # =============================================================
-# BTR AI Middleware - app.py (Version 2.1 - Debug Mode)
+# BTR AI Middleware - app.py (Version 2.2 - Groq Edition)
 # =============================================================
 # Handles: Language detection, Translation, Web Search,
-#          Knowledge Base, AI Answering
+#          Knowledge Base, AI Answering via Groq
 # =============================================================
 
 import os
@@ -25,6 +25,7 @@ CORS(app)
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 TAVILY_API_KEY    = os.getenv("TAVILY_API_KEY")
 SERPER_API_KEY    = os.getenv("SERPER_API_KEY")
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
 
 # Cache setup
 cache = {}
@@ -234,96 +235,76 @@ def search_serper(query):
 
 
 # =============================================================
-# Get AI answer from HuggingFace Zephyr
-# Retries up to 3 times if model is loading
+# Get AI answer from Groq
+# Uses Llama 3 - fast, free and reliable
 # =============================================================
 def get_ai_answer(question, knowledge_context, web_context):
     try:
-        # Build prompt
-        prompt = f"""<|system|>
-You are a helpful AI assistant for Bodoland Territorial Region (BTR), Assam, India.
-Answer clearly, accurately and respectfully based on the information provided.
-If you don't know something, say so honestly.
-</s>
-<|user|>
-KNOWLEDGE BASE:
+        if not GROQ_API_KEY:
+            print("[ERROR]: GROQ_API_KEY not found")
+            return "AI service configuration error. Please contact the administrator."
+
+        # Build messages for Groq chat format
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a helpful AI assistant for Bodoland Territorial Region (BTR), Assam, India.
+You help people with information about BTR culture, government, tourism, history and current events.
+Answer clearly, accurately and respectfully.
+Keep answers concise but complete.
+If you don't know something, say so honestly rather than making up information.
+Always be culturally sensitive and respectful to the Bodo people and their traditions."""
+            },
+            {
+                "role": "user",
+                "content": f"""Please answer this question about BTR using the information below.
+
+KNOWLEDGE BASE INFORMATION:
 {knowledge_context if knowledge_context else "No specific knowledge base information found."}
 
 WEB SEARCH RESULTS:
 {web_context if web_context else "No web search results available."}
 
 QUESTION: {question}
-</s>
-<|assistant|>"""
 
-        # Try up to 3 times if model is loading
-        for attempt in range(3):
+Please provide a helpful and accurate answer."""
+            }
+        ]
 
-            print(f"[AI attempt {attempt + 1}/3]")
+        print(f"[Groq]: Sending request...")
 
-            response = requests.post(
-                "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta",
-                headers={
-                    "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "inputs": prompt,
-                    "parameters": {
-                        "max_new_tokens": 500,
-                        "temperature": 0.7,
-                        "return_full_text": False
-                    }
-                },
-                timeout=60
-            )
+        # Call Groq API
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama3-8b-8192",
+                "messages": messages,
+                "max_tokens": 500,
+                "temperature": 0.7
+            },
+            timeout=30
+        )
 
-            # Log full raw response for debugging
-            print(f"[HF status code]: {response.status_code}")
-            result = response.json()
-            print(f"[HF raw response]: {str(result)[:300]}")
+        print(f"[Groq status]: {response.status_code}")
+        result = response.json()
+        print(f"[Groq raw response]: {str(result)[:300]}")
 
-            # Model is still loading - wait and retry
-            if isinstance(result, dict) and "error" in result:
-                error_msg = str(result["error"]).lower()
-                print(f"[HF error]: {result['error']}")
+        # Check for errors
+        if "error" in result:
+            print(f"[Groq error]: {result['error']}")
+            return "I apologize, the AI service is temporarily unavailable. Please try again."
 
-                if "loading" in error_msg:
-                    wait_time = result.get("estimated_time", 20)
-                    print(f"[Model loading, waiting {wait_time}s]")
-                    time.sleep(float(wait_time))
-                    continue
-
-                elif "quota" in error_msg or "rate" in error_msg:
-                    # Rate limited - return friendly message
-                    return "I am receiving too many requests right now. Please try again in a minute."
-
-                elif "authorization" in error_msg or "token" in error_msg:
-                    # Bad API key
-                    print("[ERROR]: HuggingFace token is invalid or missing")
-                    return "AI service configuration error. Please contact the administrator."
-
-                else:
-                    # Unknown error
-                    print(f"[Unknown HF error]: {result}")
-                    return "I apologize, the AI service is temporarily unavailable. Please try again."
-
-            # Got a valid response
-            if isinstance(result, list) and len(result) > 0:
-                answer = result[0].get("generated_text", "").strip()
-                if answer:
-                    print(f"[AI answer]: {answer[:150]}")
-                    return answer
-
-            # Empty response
-            print(f"[Empty response from HF]: {result}")
-            return "I could not generate an answer. Please try again."
-
-        # All 3 attempts failed
-        return "I apologize, the AI service is temporarily busy. Please try again in a moment."
+        # Extract and return answer
+        answer = result["choices"][0]["message"]["content"].strip()
+        print(f"[Groq answer]: {answer[:150]}")
+        return answer
 
     except Exception as e:
-        print(f"[AI exception]: {e}")
+        print(f"[Groq exception]: {e}")
         return "I apologize, I could not generate an answer right now. Please try again."
 
 
@@ -405,7 +386,7 @@ def health():
     return jsonify({
         "status"          : "running",
         "service"         : "BTR AI Middleware",
-        "version"         : "2.1",
+        "version"         : "2.2",
         "knowledge_chunks": len(knowledge_base)
     })
 
