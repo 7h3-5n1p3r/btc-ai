@@ -1,8 +1,9 @@
 # =============================================================
-# BTR AI Middleware - app.py (Version 2.2 - Groq Edition)
+# BTR AI Middleware - app.py (Version 2.3 - Bodo Fix)
 # =============================================================
 # Handles: Language detection, Translation, Web Search,
 #          Knowledge Base, AI Answering via Groq
+# New: Bodo language support, reply-in-language detection
 # =============================================================
 
 import os
@@ -31,13 +32,47 @@ GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
 cache = {}
 CACHE_EXPIRY = 3600
 
+# =============================================================
 # Language map for IndicTrans2
+# Maps detected language codes to IndicTrans2 codes
+# =============================================================
 LANGUAGE_MAP = {
-    "hi" : "hin_Deva",
-    "bn" : "ben_Beng",
-    "as" : "asm_Beng",
-    "ne" : "npi_Deva",
-    "en" : "eng_Latn",
+    "hi" : "hin_Deva",   # Hindi
+    "bn" : "ben_Beng",   # Bengali
+    "as" : "asm_Beng",   # Assamese
+    "ne" : "npi_Deva",   # Nepali
+    "en" : "eng_Latn",   # English
+    "brx": "brx_Deva",   # Bodo
+}
+
+# =============================================================
+# Keywords that indicate user wants response in a specific language
+# We check if user's message contains any of these phrases
+# =============================================================
+LANGUAGE_REQUEST_KEYWORDS = {
+    # Bodo language requests
+    "brx_Deva": [
+        "in bodo", "bodo language", "bodo te", "bodo torsino",
+        "boro language", "in boro", "बर' भाषा", "बर'",
+        "reply in bodo", "answer in bodo", "respond in bodo",
+        "translate to bodo", "bodo mwn"
+    ],
+    # Assamese language requests
+    "asm_Beng": [
+        "in assamese", "assamese language", "asomiya",
+        "অসমীয়া", "reply in assamese", "answer in assamese",
+        "translate to assamese"
+    ],
+    # Hindi language requests
+    "hin_Deva": [
+        "in hindi", "hindi language", "hindi mein", "हिंदी में",
+        "reply in hindi", "answer in hindi", "translate to hindi"
+    ],
+    # Bengali language requests
+    "ben_Beng": [
+        "in bengali", "bengali language", "bangla",
+        "বাংলায়", "reply in bengali", "answer in bengali"
+    ],
 }
 
 # Knowledge base storage
@@ -80,7 +115,112 @@ load_knowledge_base()
 
 
 # =============================================================
-# Search knowledge base for relevant content
+# FUNCTION: Check if user requested a specific reply language
+# Returns IndicTrans2 language code if found, None otherwise
+# Example: "What is BTR? Reply in Bodo" → "brx_Deva"
+# =============================================================
+def detect_requested_language(message):
+    message_lower = message.lower()
+
+    for lang_code, keywords in LANGUAGE_REQUEST_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword.lower() in message_lower:
+                print(f"[Requested language detected]: {lang_code} via keyword '{keyword}'")
+                return lang_code
+
+    return None  # No specific language requested
+
+
+# =============================================================
+# FUNCTION: Detect language of incoming message
+# =============================================================
+def detect_language(text):
+    try:
+        lang = detect(text)
+        print(f"[Language detected]: {lang}")
+        return lang
+    except Exception as e:
+        print(f"[Language detection failed]: {e}")
+        return "en"
+
+
+# =============================================================
+# FUNCTION: Translate using HuggingFace IndicTrans2
+# Best model for Indian languages including Bodo
+# =============================================================
+def translate(text, src_lang, tgt_lang):
+    # No translation needed if same language
+    if src_lang == tgt_lang:
+        return text
+
+    try:
+        # Choose model direction
+        # indic-en = any Indian language to English
+        # en-indic = English to any Indian language
+        if tgt_lang == "eng_Latn":
+            model = "ai4bharat/indictrans2-indic-en-1B"
+        else:
+            model = "ai4bharat/indictrans2-en-indic-1B"
+
+        print(f"[Translating]: {src_lang} → {tgt_lang} using {model}")
+
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{model}",
+            headers={
+                "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "inputs": text,
+                "parameters": {
+                    "src_lang": src_lang,
+                    "tgt_lang": tgt_lang
+                }
+            },
+            timeout=30
+        )
+
+        result = response.json()
+        print(f"[Translation raw response]: {str(result)[:200]}")
+
+        # Handle model loading
+        if isinstance(result, dict) and "error" in result:
+            if "loading" in str(result.get("error", "")).lower():
+                print("[Translation model loading, waiting 20s]")
+                time.sleep(20)
+                # Retry once
+                response = requests.post(
+                    f"https://api-inference.huggingface.co/models/{model}",
+                    headers={
+                        "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "inputs": text,
+                        "parameters": {
+                            "src_lang": src_lang,
+                            "tgt_lang": tgt_lang
+                        }
+                    },
+                    timeout=30
+                )
+                result = response.json()
+
+        if isinstance(result, list) and len(result) > 0:
+            translated = result[0].get("translation_text", text)
+            print(f"[Translation done]: {translated[:100]}")
+            return translated
+        else:
+            print(f"[Translation failed, returning original]: {result}")
+            return text
+
+    except Exception as e:
+        print(f"[Translation error]: {e}")
+        return text  # Return original if translation fails
+
+
+# =============================================================
+# FUNCTION: Search knowledge base for relevant content
 # =============================================================
 def search_knowledge_base(query, top_k=3):
     if not knowledge_base:
@@ -109,64 +249,7 @@ def search_knowledge_base(query, top_k=3):
 
 
 # =============================================================
-# Detect language of user message
-# =============================================================
-def detect_language(text):
-    try:
-        lang = detect(text)
-        print(f"[Language]: {lang}")
-        return lang
-    except Exception as e:
-        print(f"[Language detection failed]: {e}")
-        return "en"
-
-
-# =============================================================
-# Translate text using HuggingFace IndicTrans2
-# =============================================================
-def translate(text, src_lang, tgt_lang):
-    if src_lang == tgt_lang:
-        return text
-
-    try:
-        if tgt_lang == "eng_Latn":
-            model = "ai4bharat/indictrans2-indic-en-1B"
-        else:
-            model = "ai4bharat/indictrans2-en-indic-1B"
-
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{model}",
-            headers={
-                "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "inputs": text,
-                "parameters": {
-                    "src_lang": src_lang,
-                    "tgt_lang": tgt_lang
-                }
-            },
-            timeout=30
-        )
-
-        result = response.json()
-
-        if isinstance(result, list) and len(result) > 0:
-            translated = result[0].get("translation_text", text)
-            print(f"[Translation done]: {translated[:50]}")
-            return translated
-        else:
-            print(f"[Translation failed]: {result}")
-            return text
-
-    except Exception as e:
-        print(f"[Translation error]: {e}")
-        return text
-
-
-# =============================================================
-# Web search via Tavily (primary)
+# FUNCTION: Web search via Tavily (primary)
 # =============================================================
 def search_tavily(query):
     try:
@@ -201,7 +284,7 @@ def search_tavily(query):
 
 
 # =============================================================
-# Web search via Serper (backup)
+# FUNCTION: Web search via Serper (backup)
 # =============================================================
 def search_serper(query):
     try:
@@ -235,8 +318,8 @@ def search_serper(query):
 
 
 # =============================================================
-# Get AI answer from Groq
-# Uses Llama 3 - fast, free and reliable
+# FUNCTION: Get AI answer from Groq
+# Uses Llama 3.1 - fast, free and reliable
 # =============================================================
 def get_ai_answer(question, knowledge_context, web_context):
     try:
@@ -244,7 +327,6 @@ def get_ai_answer(question, knowledge_context, web_context):
             print("[ERROR]: GROQ_API_KEY not found")
             return "AI service configuration error. Please contact the administrator."
 
-        # Build messages for Groq chat format
         messages = [
             {
                 "role": "system",
@@ -253,7 +335,8 @@ You help people with information about BTR culture, government, tourism, history
 Answer clearly, accurately and respectfully.
 Keep answers concise but complete.
 If you don't know something, say so honestly rather than making up information.
-Always be culturally sensitive and respectful to the Bodo people and their traditions."""
+Always be culturally sensitive and respectful to the Bodo people and their traditions.
+IMPORTANT: Always respond in English only. Translation is handled separately."""
             },
             {
                 "role": "user",
@@ -267,13 +350,12 @@ WEB SEARCH RESULTS:
 
 QUESTION: {question}
 
-Please provide a helpful and accurate answer."""
+Please provide a helpful and accurate answer in English."""
             }
         ]
 
         print(f"[Groq]: Sending request...")
 
-        # Call Groq API
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -293,12 +375,10 @@ Please provide a helpful and accurate answer."""
         result = response.json()
         print(f"[Groq raw response]: {str(result)[:300]}")
 
-        # Check for errors
         if "error" in result:
             print(f"[Groq error]: {result['error']}")
             return "I apologize, the AI service is temporarily unavailable. Please try again."
 
-        # Extract and return answer
         answer = result["choices"][0]["message"]["content"].strip()
         print(f"[Groq answer]: {answer[:150]}")
         return answer
@@ -335,36 +415,57 @@ def chat():
                 "cached"  : True
             })
 
-    # Step 2: Detect language
+    # Step 2: Detect language of input message
     detected_lang = detect_language(user_message)
     src_lang_code = LANGUAGE_MAP.get(detected_lang, "eng_Latn")
 
-    # Step 3: Translate to English if needed
-    if detected_lang != "en":
+    # Step 3: Check if user requested reply in specific language
+    # This handles cases like "What is BTR? Reply in Bodo"
+    requested_reply_lang = detect_requested_language(user_message)
+    print(f"[Requested reply language]: {requested_reply_lang}")
+
+    # Step 4: Translate input to English if needed
+    if detected_lang != "en" and src_lang_code != "eng_Latn":
         english_message = translate(user_message, src_lang_code, "eng_Latn")
     else:
         english_message = user_message
 
-    # Step 4: Search knowledge base
+    # Step 5: Search knowledge base
     knowledge_context = search_knowledge_base(english_message)
     print(f"[Knowledge]: {len(knowledge_context)} chars found")
 
-    # Step 5: Search web
+    # Step 6: Search web
     web_context = search_tavily(english_message)
     if not web_context:
         print("[Falling back to Serper]")
         web_context = search_serper(english_message)
 
-    # Step 6: Get AI answer
+    # Step 7: Get AI answer (always in English)
     english_answer = get_ai_answer(english_message, knowledge_context, web_context)
 
-    # Step 7: Translate answer back if needed
-    if detected_lang != "en" and src_lang_code != "eng_Latn":
-        final_answer = translate(english_answer, "eng_Latn", src_lang_code)
+    # Step 8: Determine reply language
+    # Priority: 1) Explicitly requested language
+    #           2) User's input language
+    #           3) Default English
+    if requested_reply_lang:
+        # User asked for specific language (e.g. "reply in Bodo")
+        reply_lang_code = requested_reply_lang
+        print(f"[Replying in requested language]: {reply_lang_code}")
+    elif detected_lang != "en" and src_lang_code != "eng_Latn":
+        # User wrote in non-English, reply in same language
+        reply_lang_code = src_lang_code
+        print(f"[Replying in detected language]: {reply_lang_code}")
+    else:
+        # Default to English
+        reply_lang_code = None
+
+    # Step 9: Translate answer to reply language if needed
+    if reply_lang_code and reply_lang_code != "eng_Latn":
+        final_answer = translate(english_answer, "eng_Latn", reply_lang_code)
     else:
         final_answer = english_answer
 
-    # Step 8: Cache result
+    # Step 10: Cache and return
     cache[cache_key] = {
         "answer"  : final_answer,
         "language": detected_lang,
@@ -386,7 +487,7 @@ def health():
     return jsonify({
         "status"          : "running",
         "service"         : "BTR AI Middleware",
-        "version"         : "2.2",
+        "version"         : "2.3",
         "knowledge_chunks": len(knowledge_base)
     })
 
